@@ -382,7 +382,9 @@ void MaoziRankClientTest::completesTimeoutOnceAndRejectsMalformedTeams()
         QJsonObject{{"id", "fraction"}, {"name", "fraction"}, {"team", 0.5}},
         QJsonObject{{"id", "boolean"}, {"name", "boolean"}, {"team", true}}});
     fixture.snapshot = QJsonDocument(root).toJson();
-    MaoziRankClient client(fixture.authUrl(), fixture.snapshotUrl(), 100);
+    // The forced timeout below is expressed relative to this budget; a 100ms
+    // budget is not enough for a loaded CI host to answer a local request.
+    MaoziRankClient client(fixture.authUrl(), fixture.snapshotUrl(), 1500);
     QSignalSpy finished(&client, &MaoziRankClient::snapshotRefreshFinished);
     client.refresh();
     QTRY_COMPARE(finished.size(), 1);
@@ -397,7 +399,7 @@ void MaoziRankClientTest::completesTimeoutOnceAndRejectsMalformedTeams()
     client.checkForChanges();
     QTRY_VERIFY(!client.syncPending());
     QCOMPARE(finished.size(), 1);
-    fixture.delayMs = 300;
+    fixture.delayMs = 2500;
     client.refresh();
     QTRY_COMPARE(finished.size(), 2);
     QCOMPARE(finished.last().first().toBool(), false);
