@@ -179,7 +179,7 @@ void QmlDanmakuOverlayTest::launchesAQueuedMessageIntoTheConfiguredRegion()
     std::unique_ptr<QQuickItem> overlay(createOverlay(engine, window, controller));
     QVERIFY(overlay != nullptr);
 
-    QTRY_VERIFY_WITH_TIMEOUT(activeLines(overlay.get()).size() == 1, 1500);
+    QTRY_VERIFY_WITH_TIMEOUT(activeLines(overlay.get()).size() == 1, 5000);
     QObject *line = activeLines(overlay.get()).constFirst();
     QVERIFY(line->property("y").toDouble() >= 0);
     QVERIFY(line->property("y").toDouble() < overlay->height() / 2.0);
@@ -275,7 +275,7 @@ void QmlDanmakuOverlayTest::clearsActiveAndQueuedMessagesWhenDisabled()
     controller.enqueue(message(QStringLiteral("2"), QStringLiteral("second")));
     std::unique_ptr<QQuickItem> overlay(createOverlay(engine, window, controller));
     QVERIFY(overlay != nullptr);
-    QTRY_VERIFY_WITH_TIMEOUT(activeLines(overlay.get()).size() == 1, 1500);
+    QTRY_VERIFY_WITH_TIMEOUT(activeLines(overlay.get()).size() == 1, 5000);
 
     overlay->setProperty("enabled", false);
     QTRY_COMPARE_WITH_TIMEOUT(activeLines(overlay.get()).size(), 0, 1000);

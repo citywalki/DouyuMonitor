@@ -184,6 +184,12 @@ macOS 图标（`.icns` 与运行时 PNG）从同一个 SVG 生成：
 ./scripts/generate-app-icon-macos.sh
 ```
 
+## 视觉基线与 CI
+
+视觉回归基线按主机维护在 `tests/visual/baselines/<内核>-<系统主版本>/`（例如 `darwin-27`、`winnt-…`）；缺失该主机的基线目录时测试会跳过并提示运行对应平台的 `scripts/update-visual-baselines.ps1 -Approve` 或 `scripts/update-visual-baselines.sh --approve`，避免用其他主机的字形栅格化结果误报差异。
+
+`.github/workflows/macos.yml` 在 GitHub macOS arm64 runner 上构建、测试、打包并上传 `DouyuMonitor-macOS-arm64.zip`。CI 运行除 `qml_visual_smoke_test` 外的全部测试：该测试的房间卡片几何断言取决于主机字体度量（runner 的动作按钮更宽），只在开发机上执行。
+
 ## 验收边界
 
 自动化验证覆盖 C++、QML、服务协议、libmpv 依赖与自测入口。正式版布局最多支持 16 路并全部解码，24 路全解码测试版通过独立构建开关生成。发布前仍应在目标用户环境完成真实斗鱼 1/4/9/12/16/24 路长时间播放验收，重点观察高路数下的弹幕、CPU/GPU、内存和关闭稳定性。

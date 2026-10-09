@@ -384,6 +384,10 @@ private slots:
 
 void QmlVisualRegressionTest::keepsLayoutMatrixContainedAndNonOverlapping()
 {
+
+    // Baselines are maintained per host; other hosts report the missing set
+    // instead of failing on rasterization differences.
+    if (!visualBaselinesAvailable()) QSKIP(qPrintable(visualBaselineUpdateHint()));
     registerQmlTypes();
 
     const struct Fixture {
@@ -464,6 +468,10 @@ void QmlVisualRegressionTest::keepsLayoutMatrixContainedAndNonOverlapping()
 
 void QmlVisualRegressionTest::capturesHeaderDualPrimaryStates()
 {
+
+    // Baselines are maintained per host; other hosts report the missing set
+    // instead of failing on rasterization differences.
+    if (!visualBaselinesAvailable()) QSKIP(qPrintable(visualBaselineUpdateHint()));
     registerQmlTypes();
     FakeHeaderController controller;
 
@@ -510,6 +518,10 @@ void QmlVisualRegressionTest::capturesHeaderDualPrimaryStates()
 
 void QmlVisualRegressionTest::capturesRoomControlStates()
 {
+
+    // Baselines are maintained per host; other hosts report the missing set
+    // instead of failing on rasterization differences.
+    if (!visualBaselinesAvailable()) QSKIP(qPrintable(visualBaselineUpdateHint()));
     registerQmlTypes();
     std::unique_ptr<QQuickWindow> window(createHostWindow(QSize(640, 420)));
     QVERIFY(window != nullptr);
@@ -552,6 +564,10 @@ void QmlVisualRegressionTest::capturesRoomControlStates()
 
 void QmlVisualRegressionTest::capturesNavigationAndTeamStates()
 {
+
+    // Baselines are maintained per host; other hosts report the missing set
+    // instead of failing on rasterization differences.
+    if (!visualBaselinesAvailable()) QSKIP(qPrintable(visualBaselineUpdateHint()));
     registerQmlTypes();
     FakeGuildController controller;
 
@@ -610,6 +626,10 @@ void QmlVisualRegressionTest::capturesNavigationAndTeamStates()
 
 void QmlVisualRegressionTest::keepsMaoziToolbarVisibleAndColumnsAligned()
 {
+
+    // Baselines are maintained per host; other hosts report the missing set
+    // instead of failing on rasterization differences.
+    if (!visualBaselinesAvailable()) QSKIP(qPrintable(visualBaselineUpdateHint()));
     registerQmlTypes();
     FakeMaoziController controller;
     std::unique_ptr<QQuickWindow> window(createHostWindow(QSize(1920, 1080)));

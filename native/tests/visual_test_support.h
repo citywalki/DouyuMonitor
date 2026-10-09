@@ -27,6 +27,11 @@ QVariantList visualRoomFixtures(int count,
                                 bool includeQualities = false);
 
 QImage visualCapture(QQuickWindow *window, const QString &name);
+// Visual baselines are host-specific (font rasterization differs between macOS
+// releases and Qt builds), so each host maintains its own set. Tests skip
+// instead of failing when the running host has no baselines yet.
+bool visualBaselinesAvailable();
+QString visualBaselineUpdateHint();
 VisualComparisonResult visualCompareWithBaseline(
     const QImage &image,
     const QString &name,

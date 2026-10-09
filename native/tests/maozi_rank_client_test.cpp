@@ -311,7 +311,8 @@ void MaoziRankClientTest::fillsOnlyMissingCaptainTeams()
         QCOMPARE(entry.value("role").toString(), QStringLiteral("captain"));
         QCOMPARE(entry.value("teamId").toString(), QString::number(teamIds.at(i)));
         QCOMPARE(entry.value("teamName").toString(), teamNames.at(i));
-        QVERIFY(entry.value("teamValid").toBool());
+        // Validity is resolved by a follow-up request, so allow it to land.
+        QTRY_VERIFY_WITH_TIMEOUT(entry.value("teamValid").toBool(), 3000);
     }
     for (const auto &room : {QStringLiteral("320155"), QStringLiteral("71415")})
         QVERIFY(client.entryForRoomId(room).value("teamId").toString().isEmpty());

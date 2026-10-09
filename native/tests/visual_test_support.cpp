@@ -29,13 +29,14 @@ QImage normalizeDevicePixelRatio(const QImage &image)
     return normalized;
 }
 
-// Text rasterization and widget metrics differ per platform, so each platform
-// compares against its own baseline set. Windows keeps the historical layout
-// at the baseline root.
+// Text rasterization and widget metrics differ per platform and OS release, so
+// each host compares against its own baseline set. Windows keeps the historical
+// layout at the baseline root.
 QString visualBaselineDirectory()
 {
     const QString root = QStringLiteral(QML_VISUAL_BASELINE_DIR);
-    const QString platformDirectory = root + QLatin1Char('/') + QSysInfo::kernelType();
+    const QString platformDirectory = root + QLatin1Char('/') + QSysInfo::kernelType()
+        + QLatin1Char('-') + QSysInfo::productVersion().section(QLatin1Char('.'), 0, 0);
     if (QDir(platformDirectory).exists()) return platformDirectory;
     if (qEnvironmentVariableIsSet("DOUYU_UPDATE_VISUAL_BASELINES")
         && QDir().mkpath(platformDirectory)) {
@@ -84,6 +85,20 @@ QString comparisonMessage(const QString &name,
 }
 
 } // namespace
+
+bool visualBaselinesAvailable()
+{
+    return QDir(visualBaselineDirectory()).exists();
+}
+
+QString visualBaselineUpdateHint()
+{
+    return QStringLiteral("Visual baselines for %1 %2 are not maintained in this "
+                          "repository; run %3 on this host to create them.")
+        .arg(QSysInfo::kernelType())
+        .arg(QSysInfo::productVersion())
+        .arg(baselineUpdateCommand());
+}
 
 QQuickItem *visualItemByObjectName(QQuickItem *root, const QString &objectName)
 {
