@@ -20,6 +20,9 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     exit 1
 fi
 
+# cmake --preset resolves the preset file from the current directory.
+cd "${NATIVE_DIR}"
+
 cmake --preset "${PRESET}"
 cmake --build --preset "${PRESET}" --target douyu_monitor_native
 
@@ -46,7 +49,13 @@ mkdir -p "${FRAMEWORKS}"
 "${QT_ROOT}/bin/macdeployqt" "${APP_BUNDLE}" -verbose=1 -always-overwrite -no-codesign \
     -qmldir="${NATIVE_DIR}/app/qml"
 
-declare -A resolved=()
+# Index of Homebrew libraries by file name. Kept in a file rather than an
+# associative array so the script also runs under the bash 3.2 shipped with
+# macOS and the CI runner.
+LIBRARY_INDEX="$(mktemp)"
+trap 'rm -f "${LIBRARY_INDEX}"' EXIT
+find "${BREW_PREFIX}/opt" -maxdepth 4 -name '*.dylib' -path '*/lib/*' 2>/dev/null \
+    | awk -F/ '{ print $NF "\t" $0 }' > "${LIBRARY_INDEX}"
 
 # Maps a load command to the file it must be satisfied with, or fails when the
 # reference is a system library or already relative to the bundle.
@@ -65,20 +74,15 @@ resolve_reference()
         return 0
     fi
 
-    if [[ -n "${resolved[${name}]:-}" ]]; then
-        printf '%s\n' "${resolved[${name}]}"
+    if [[ "${reference}" = /* && -e "${reference}" ]]; then
+        printf '%s\n' "${reference}"
         return 0
     fi
 
-    local candidate=""
-    if [[ "${reference}" = /* && -e "${reference}" ]]; then
-        candidate="${reference}"
-    else
-        candidate="$(find "${BREW_PREFIX}/opt" -maxdepth 4 -name "${name}" -path '*/lib/*' 2>/dev/null | head -1)"
-    fi
+    local candidate
+    candidate="$(awk -v name="${name}" '$1 == name { print $2; exit }' "${LIBRARY_INDEX}")"
     [[ -n "${candidate}" ]] || return 1
 
-    resolved["${name}"]="${candidate}"
     printf '%s\n' "${candidate}"
 }
 
@@ -98,13 +102,16 @@ vendor_dependencies()
             pending+=("${bundled}")
         fi
     done < <(find "${FRAMEWORKS}" -depth -type f 2>/dev/null)
-    declare -A visited=()
+    local visited_file
+    visited_file="$(mktemp)"
 
-    while ((${#pending[@]} > 0)); do
+    while [[ ${#pending[@]} -gt 0 ]]; do
         local target="${pending[0]}"
         pending=("${pending[@]:1}")
-        [[ -n "${visited[${target}]:-}" ]] && continue
-        visited["${target}"]=1
+        if grep -Fxq "${target}" "${visited_file}"; then
+            continue
+        fi
+        printf '%s\n' "${target}" >> "${visited_file}"
 
         local reference source_path base vendored
         while IFS= read -r reference; do
@@ -122,6 +129,7 @@ vendor_dependencies()
                 "@executable_path/../Frameworks/${base}" "${target}"
         done < <(otool -L "${target}" | tail -n +2 | awk '{print $1}' | sort -u)
     done
+    rm -f "${visited_file}"
 }
 
 vendor_dependencies
