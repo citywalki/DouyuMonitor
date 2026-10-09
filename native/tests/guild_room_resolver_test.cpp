@@ -249,8 +249,7 @@ void GuildRoomResolverTest::prioritizesVerifiedRoomMetadataBeforeResolution()
     response.results.first().online = true;
     QVERIFY(resolver.handleResponse(response));
 
-    QTest::qWait(1300);
-    QCOMPARE(transport.requestCount, 2);
+    QTRY_COMPARE_WITH_TIMEOUT(transport.requestCount, 2, 5000);
     QCOMPARE(transport.lastQuery, QStringLiteral("主播阿飞"));
 }
 
@@ -389,8 +388,7 @@ void GuildRoomResolverTest::skipsMetadataRefreshWhenCacheAlreadyComplete()
              QString());
 
     resolver.refreshMetadata();
-    QTest::qWait(1300);
-    QCOMPARE(transport.statusRequestCount, 1);
+    QTRY_COMPARE_WITH_TIMEOUT(transport.statusRequestCount, 1, 5000);
     QCOMPARE(transport.lastStatusRoomId, QStringLiteral("84452"));
 }
 
@@ -471,8 +469,7 @@ void GuildRoomResolverTest::skipsBundledAndCachedRoomIds()
     }};
     QVERIFY(resolver.handleResponse(metadataResponse));
 
-    QTest::qWait(1300);
-    QCOMPARE(transport.requestCount, 2);
+    QTRY_COMPARE_WITH_TIMEOUT(transport.requestCount, 2, 5000);
     QCOMPARE(transport.lastQuery, QStringLiteral("84452"));
 
     ServiceResponse cachedMetadataResponse;
@@ -486,8 +483,7 @@ void GuildRoomResolverTest::skipsBundledAndCachedRoomIds()
     }};
     QVERIFY(resolver.handleResponse(cachedMetadataResponse));
 
-    QTest::qWait(1300);
-    QCOMPARE(transport.requestCount, 3);
+    QTRY_COMPARE_WITH_TIMEOUT(transport.requestCount, 3, 5000);
     QCOMPARE(transport.lastQuery, QStringLiteral("午夜抹抹茶"));
 
     ServiceResponse response;

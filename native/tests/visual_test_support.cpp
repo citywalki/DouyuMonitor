@@ -32,17 +32,25 @@ QImage normalizeDevicePixelRatio(const QImage &image)
 // Text rasterization and widget metrics differ per platform and OS release, so
 // each host compares against its own baseline set. Windows keeps the historical
 // layout at the baseline root.
+QString platformBaselineDirectory()
+{
+    return QStringLiteral(QML_VISUAL_BASELINE_DIR) + QLatin1Char('/') + QSysInfo::kernelType()
+        + QLatin1Char('-') + QSysInfo::productVersion().section(QLatin1Char('.'), 0, 0);
+}
+
 QString visualBaselineDirectory()
 {
-    const QString root = QStringLiteral(QML_VISUAL_BASELINE_DIR);
-    const QString platformDirectory = root + QLatin1Char('/') + QSysInfo::kernelType()
-        + QLatin1Char('-') + QSysInfo::productVersion().section(QLatin1Char('.'), 0, 0);
+    const QString platformDirectory = platformBaselineDirectory();
     if (QDir(platformDirectory).exists()) return platformDirectory;
     if (qEnvironmentVariableIsSet("DOUYU_UPDATE_VISUAL_BASELINES")
         && QDir().mkpath(platformDirectory)) {
         return platformDirectory;
     }
-    return root;
+    // Windows keeps its historical baseline set at the root of the directory.
+    if (QSysInfo::kernelType() == QStringLiteral("winnt")) {
+        return QStringLiteral(QML_VISUAL_BASELINE_DIR);
+    }
+    return platformDirectory;
 }
 
 QString baselineUpdateCommand()
