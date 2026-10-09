@@ -1,9 +1,9 @@
 #include <QSignalSpy>
 #include <QtTest/QtTest>
 
-#include "app/windows_tray_service.h"
+#include "app/system_tray_service.h"
 
-class WindowsTrayServiceTest final : public QObject {
+class SystemTrayServiceTest final : public QObject {
     Q_OBJECT
 
 private slots:
@@ -11,9 +11,9 @@ private slots:
     void forwardsTestActions();
 };
 
-void WindowsTrayServiceTest::startsAndStopsIdempotently()
+void SystemTrayServiceTest::startsAndStopsIdempotently()
 {
-    WindowsTrayService service;
+    SystemTrayService service;
     QVERIFY(!service.isRunning());
     service.stop();
     QVERIFY(!service.isRunning());
@@ -26,11 +26,11 @@ void WindowsTrayServiceTest::startsAndStopsIdempotently()
 #endif
 }
 
-void WindowsTrayServiceTest::forwardsTestActions()
+void SystemTrayServiceTest::forwardsTestActions()
 {
-    WindowsTrayService service;
-    QSignalSpy showSpy(&service, &WindowsTrayService::showRequested);
-    QSignalSpy quitSpy(&service, &WindowsTrayService::quitRequested);
+    SystemTrayService service;
+    QSignalSpy showSpy(&service, &SystemTrayService::showRequested);
+    QSignalSpy quitSpy(&service, &SystemTrayService::quitRequested);
 
 #ifdef DOUYU_TESTING
     service.triggerShowForTest();
@@ -42,6 +42,6 @@ void WindowsTrayServiceTest::forwardsTestActions()
 #endif
 }
 
-QTEST_GUILESS_MAIN(WindowsTrayServiceTest)
+QTEST_GUILESS_MAIN(SystemTrayServiceTest)
 
-#include "windows_tray_service_test.moc"
+#include "system_tray_service_test.moc"

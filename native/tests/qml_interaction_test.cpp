@@ -2389,7 +2389,7 @@ void QmlInteractionTest::truncatesLongRoomTitleBeforeActions()
     QQmlComponent component(&engine, QUrl(QStringLiteral("qrc:/qml/components/RoomTile.qml")));
     QVERIFY2(component.isReady(), qPrintable(component.errorString()));
     QVariantMap properties = roomTileProperties(QStringLiteral("idle"));
-    properties[QStringLiteral("title")] = QString(180, QLatin1Char('长'));
+    properties[QStringLiteral("title")] = QStringLiteral("长").repeated(180);
     std::unique_ptr<QObject> tile(component.createWithInitialProperties(properties));
     QVERIFY2(tile != nullptr, qPrintable(component.errorString()));
     QObject *title = tile->findChild<QObject *>(QStringLiteral("roomTitleText"));
@@ -2409,7 +2409,7 @@ void QmlInteractionTest::keepsSidebarMetadataClearOfActionsForLongTitles()
     snapshot.roomId = QStringLiteral("63136");
     snapshot.metadata.roomId = snapshot.roomId;
     snapshot.metadata.anchorName = QStringLiteral("主播");
-    snapshot.metadata.title = QString(180, QLatin1Char('长'));
+    snapshot.metadata.title = QStringLiteral("长").repeated(180);
     snapshot.liveStatus = RoomLiveStatus::Online;
     roomModel.applySnapshots({snapshot});
 

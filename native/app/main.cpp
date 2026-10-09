@@ -143,7 +143,11 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationDomain(QStringLiteral("douyu-monitor.local"));
     QCoreApplication::setApplicationName(QStringLiteral("DouyuMonitor"));
     ApplicationLogger::install();
+#ifdef Q_OS_WIN
     QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/app/assets/douyu_monitor.ico")));
+#else
+    QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/app/assets/douyu_monitor.png")));
+#endif
     qInfo() << "application started";
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
     QQuickStyle::setStyle(QStringLiteral("Basic"));
@@ -167,10 +171,27 @@ int main(int argc, char *argv[])
                        QStringLiteral("DouyuMonitor"), QStringLiteral("DouyuMonitor"));
     std::unique_ptr<AppController> controller;
     if (!selfTest) {
+        // The packaged layout places the service next to the application
+        // binary; the frozen service keeps its platform executable suffix.
+#ifdef Q_OS_WIN
+        const QString serviceExecutableName = QStringLiteral("streamget_service.exe");
+#else
+        const QString serviceExecutableName = QStringLiteral("streamget_service");
+#endif
         const QDir appDir(QCoreApplication::applicationDirPath());
-        const QString bundledService = appDir.filePath(QStringLiteral("streamget_service/streamget_service.exe"));
-        const QString legacyService = appDir.filePath(QStringLiteral("streamget_service.exe"));
+        const QString bundledService = appDir.filePath(
+            QStringLiteral("streamget_service/%1").arg(serviceExecutableName));
+        const QString legacyService = appDir.filePath(serviceExecutableName);
+        // The macOS bundle keeps the service in Contents/Resources: nested
+        // code below Contents/MacOS cannot be code signed.
+#ifdef Q_OS_MACOS
+        const QString resourceService = appDir.filePath(
+            QStringLiteral("../Resources/streamget_service/%1").arg(serviceExecutableName));
+        const QString serviceProgram = QFileInfo::exists(resourceService) ? resourceService
+            : (QFileInfo::exists(bundledService) ? bundledService : legacyService);
+#else
         const QString serviceProgram = QFileInfo::exists(bundledService) ? bundledService : legacyService;
+#endif
         controller = std::make_unique<AppController>(serviceProgram, &settings);
     }
 

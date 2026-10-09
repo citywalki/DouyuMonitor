@@ -21,6 +21,20 @@ endif()
 set(CMAKE_AUTOMOC ON)
 
 set(QT_ROOT "$ENV{QT_ROOT}" CACHE PATH "Qt SDK root")
+if(APPLE AND NOT QT_ROOT)
+    # Homebrew Qt keeps bin/, plugins/ and the QML module tree at the keg root.
+    execute_process(
+        COMMAND brew --prefix qt
+        OUTPUT_VARIABLE _douyu_brew_qt_prefix
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(_douyu_brew_qt_prefix AND EXISTS "${_douyu_brew_qt_prefix}")
+        # Cached so that build scripts and re-configure runs see the same SDK.
+        set(QT_ROOT "${_douyu_brew_qt_prefix}" CACHE PATH "Qt SDK root" FORCE)
+    endif()
+    unset(_douyu_brew_qt_prefix)
+endif()
 if(QT_ROOT)
     list(PREPEND CMAKE_PREFIX_PATH "${QT_ROOT}")
 endif()
@@ -37,20 +51,103 @@ find_package(Qt6 CONFIG REQUIRED COMPONENTS
     QuickTest
 )
 
-set(MPV_ROOT "$ENV{MPV_ROOT}" CACHE PATH "libmpv SDK root")
-find_path(MPV_INCLUDE_DIR NAMES mpv/client.h PATHS "${MPV_ROOT}/include" NO_DEFAULT_PATH REQUIRED)
-find_library(MPV_LIBRARY NAMES libmpv mpv PATHS "${MPV_ROOT}" "${MPV_ROOT}/lib" NO_DEFAULT_PATH REQUIRED)
-set(MPV_RUNTIME_DLL "${MPV_ROOT}/libmpv-2.dll")
-if(NOT EXISTS "${MPV_RUNTIME_DLL}")
-    message(FATAL_ERROR "libmpv runtime DLL not found: ${MPV_RUNTIME_DLL}")
+# Runtime search paths for standalone test executables. The Windows SDK layout
+# puts plugins/ and qml/ at the Qt root; Homebrew Qt on macOS keeps them under
+# share/qt/ instead.
+if(QT_ROOT)
+    set(DOUYU_QT_BIN_DIR "${QT_ROOT}/bin")
+    set(DOUYU_QT_PLUGIN_DIR "${QT_ROOT}/plugins")
+    set(DOUYU_QT_QML_DIR "${QT_ROOT}/qml")
+    if(APPLE AND NOT EXISTS "${DOUYU_QT_QML_DIR}/QtQuick")
+        set(DOUYU_QT_QML_DIR "${QT_ROOT}/share/qt/qml")
+    endif()
+    if(APPLE AND NOT EXISTS "${DOUYU_QT_PLUGIN_DIR}/platforms")
+        set(DOUYU_QT_PLUGIN_DIR "${QT_ROOT}/share/qt/plugins")
+    endif()
+else()
+    set(DOUYU_QT_BIN_DIR "")
+    set(DOUYU_QT_PLUGIN_DIR "")
+    set(DOUYU_QT_QML_DIR "")
 endif()
+
+# The close-lifecycle regression drives real window state transitions, which
+# only the native Windows platform plugin reproduces.
+if(WIN32)
+    set(DOUYU_TEST_QPA_PLATFORM "windows")
+else()
+    set(DOUYU_TEST_QPA_PLATFORM "offscreen")
+endif()
+
+# Platform services: Win32 on Windows, Objective-C++/AppKit on macOS, and a
+# neutral no-op stub elsewhere.
+set(DOUYU_TRAY_SERVICE_SOURCES src/app/system_tray_service.cpp)
+set(DOUYU_NOTIFICATION_SERVICE_SOURCES src/app/system_notification_service.cpp)
+if(APPLE)
+    enable_language(OBJCXX)
+    list(APPEND DOUYU_TRAY_SERVICE_SOURCES src/app/system_tray_service_mac.mm)
+    list(APPEND DOUYU_NOTIFICATION_SERVICE_SOURCES src/app/system_notification_mac.mm)
+    find_library(DOUYU_USER_NOTIFICATIONS_FRAMEWORK UserNotifications REQUIRED)
+    find_library(DOUYU_APPKIT_FRAMEWORK AppKit REQUIRED)
+endif()
+
+set(MPV_ROOT "$ENV{MPV_ROOT}" CACHE PATH "libmpv SDK root")
+if(APPLE)
+    # Homebrew mpv ships libmpv as a dylib; MPV_ROOT is only needed for a
+    # hand-built SDK, so fall back to the default search paths.
+    find_path(MPV_INCLUDE_DIR NAMES mpv/client.h HINTS "${MPV_ROOT}/include")
+    find_library(MPV_LIBRARY NAMES libmpv mpv HINTS "${MPV_ROOT}" "${MPV_ROOT}/lib")
+elseif(UNIX)
+    find_path(MPV_INCLUDE_DIR NAMES mpv/client.h HINTS "${MPV_ROOT}/include")
+    find_library(MPV_LIBRARY NAMES libmpv mpv HINTS "${MPV_ROOT}" "${MPV_ROOT}/lib")
+else()
+    find_path(MPV_INCLUDE_DIR NAMES mpv/client.h PATHS "${MPV_ROOT}/include" NO_DEFAULT_PATH REQUIRED)
+    find_library(MPV_LIBRARY NAMES libmpv mpv PATHS "${MPV_ROOT}" "${MPV_ROOT}/lib" NO_DEFAULT_PATH REQUIRED)
+endif()
+if(NOT MPV_INCLUDE_DIR OR NOT MPV_LIBRARY)
+    message(FATAL_ERROR
+        "libmpv SDK not found. Set MPV_ROOT to a libmpv SDK root, or install libmpv "
+        "(macOS: brew install mpv).")
+endif()
+file(REAL_PATH "${MPV_LIBRARY}" MPV_RUNTIME_LIBRARY)
+
+# Filename used when the runtime library is copied next to a build/test binary.
+# Windows links against mpv.dll regardless of the import library name; on Unix
+# the loader uses the real file name.
+if(WIN32)
+    set(DOUYU_MPV_RUNTIME_FILE_NAME "mpv.dll")
+else()
+    get_filename_component(DOUYU_MPV_RUNTIME_FILE_NAME "${MPV_RUNTIME_LIBRARY}" NAME)
+endif()
+
+# Deployed executables and test binaries load libmpv from their own directory on
+# Windows. macOS resolves the Homebrew dylib through its absolute install name
+# during development, and bundled builds rewrite the load command to the copy in
+# Contents/Frameworks (see scripts/bundle-macos-app.sh).
+function(douyu_copy_mpv_runtime target_name)
+    if(APPLE)
+        return()
+    endif()
+    add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MPV_RUNTIME_LIBRARY}"
+            "$<TARGET_FILE_DIR:${target_name}>/${DOUYU_MPV_RUNTIME_FILE_NAME}"
+    )
+endfunction()
 
 add_library(mpv::mpv SHARED IMPORTED GLOBAL)
 set_target_properties(mpv::mpv PROPERTIES
-    IMPORTED_IMPLIB "${MPV_LIBRARY}"
-    IMPORTED_LOCATION "${MPV_RUNTIME_DLL}"
+    IMPORTED_LOCATION "${MPV_RUNTIME_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${MPV_INCLUDE_DIR}"
 )
+if(WIN32)
+    set_target_properties(mpv::mpv PROPERTIES IMPORTED_IMPLIB "${MPV_LIBRARY}")
+endif()
+# macOS resolves Homebrew dylibs by their absolute install name, so the
+# development build needs no runtime copy. Bundled builds rewrite the install
+# name to @rpath (see scripts/bundle-macos-app.sh).
+if(WIN32 AND NOT EXISTS "${MPV_RUNTIME_LIBRARY}")
+    message(FATAL_ERROR "libmpv runtime DLL not found: ${MPV_RUNTIME_LIBRARY}")
+endif()
 
 enable_testing()
 
@@ -95,8 +192,8 @@ qt_add_executable(maozi_team_import_test
 target_link_libraries(maozi_team_import_test PRIVATE Qt6::Test douyu_guild)
 add_test(NAME maozi_team_import_test COMMAND maozi_team_import_test)
 set_property(TEST maozi_team_import_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
 )
 qt_add_resources(douyu_guild guild_roster_resources
     PREFIX "/guild"
@@ -115,9 +212,9 @@ target_link_libraries(guild_roster_test PRIVATE
 )
 add_test(NAME guild_roster_test COMMAND guild_roster_test)
 set_property(TEST guild_roster_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
-    "QML2_IMPORT_PATH=set:${QT_ROOT}/qml"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
+    "QML2_IMPORT_PATH=set:${DOUYU_QT_QML_DIR}"
 )
 
 add_executable(guild_room_resolver_test
@@ -132,9 +229,9 @@ target_link_libraries(guild_room_resolver_test PRIVATE
 target_include_directories(guild_room_resolver_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME guild_room_resolver_test COMMAND guild_room_resolver_test)
 set_property(TEST guild_room_resolver_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
-    "QML2_IMPORT_PATH=set:${QT_ROOT}/qml"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
+    "QML2_IMPORT_PATH=set:${DOUYU_QT_QML_DIR}"
 )
 
 qt_add_library(douyu_qml STATIC)
@@ -230,17 +327,13 @@ qt_add_resources(qml_engine_smoke_test qml_engine_test_resources
         app/qml/dialogs/TeamManagerDialog.qml
         ${DOUYU_QML_ICON_ASSETS}
 )
-add_custom_command(TARGET qml_engine_smoke_test POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${MPV_RUNTIME_DLL}"
-        "$<TARGET_FILE_DIR:qml_engine_smoke_test>/mpv.dll"
-)
+douyu_copy_mpv_runtime(qml_engine_smoke_test)
 add_test(NAME qml_engine_smoke_test COMMAND qml_engine_smoke_test)
 set_property(TEST qml_engine_smoke_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
     "QT_QPA_PLATFORM=set:offscreen"
-    "QML2_IMPORT_PATH=set:${QT_ROOT}/qml"
+    "QML2_IMPORT_PATH=set:${DOUYU_QT_QML_DIR}"
     "QT_QUICK_CONTROLS_STYLE=set:Basic"
 )
 
@@ -298,16 +391,12 @@ qt_add_resources(qml_visual_smoke_test qml_visual_smoke_test_resources
         app/qml/dialogs/TeamManagerDialog.qml
         ${DOUYU_QML_ICON_ASSETS}
 )
-add_custom_command(TARGET qml_visual_smoke_test POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${MPV_RUNTIME_DLL}"
-        "$<TARGET_FILE_DIR:qml_visual_smoke_test>/mpv.dll"
-)
+douyu_copy_mpv_runtime(qml_visual_smoke_test)
 add_test(NAME qml_visual_smoke_test COMMAND qml_visual_smoke_test)
 set_property(TEST qml_visual_smoke_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
-    "QML2_IMPORT_PATH=set:${QT_ROOT}/qml"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
+    "QML2_IMPORT_PATH=set:${DOUYU_QT_QML_DIR}"
     "QT_QUICK_CONTROLS_STYLE=set:Basic"
 )
 
@@ -335,18 +424,17 @@ target_compile_definitions(qml_visual_regression_test PRIVATE
     QML_VISUAL_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}/verification/qml-regression"
     QML_VISUAL_BASELINE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/visual/baselines"
 )
-add_custom_command(TARGET qml_visual_regression_test POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${MPV_RUNTIME_DLL}"
-        "$<TARGET_FILE_DIR:qml_visual_regression_test>/mpv.dll"
-)
+douyu_copy_mpv_runtime(qml_visual_regression_test)
 add_test(NAME qml_visual_regression_test COMMAND qml_visual_regression_test)
 set_property(TEST qml_visual_regression_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
-    "QML2_IMPORT_PATH=set:${QT_ROOT}/qml"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
+    "QML2_IMPORT_PATH=set:${DOUYU_QT_QML_DIR}"
     "QT_QPA_PLATFORM=set:offscreen"
     "QT_QUICK_CONTROLS_STYLE=set:Basic"
+    # Baselines are stored in device-independent pixels; pinning the scale
+    # keeps Retina hosts from capturing at 2x and comparing resampled text.
+    "QT_SCREEN_SCALE_FACTORS=set:1"
 )
 
 add_executable(qml_interaction_test
@@ -401,16 +489,12 @@ qt_add_resources(qml_interaction_test qml_interaction_test_resources
         app/qml/dialogs/TeamManagerDialog.qml
         ${DOUYU_QML_ICON_ASSETS}
 )
-add_custom_command(TARGET qml_interaction_test POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${MPV_RUNTIME_DLL}"
-        "$<TARGET_FILE_DIR:qml_interaction_test>/mpv.dll"
-)
+douyu_copy_mpv_runtime(qml_interaction_test)
 add_test(NAME qml_interaction_test COMMAND qml_interaction_test)
 set_property(TEST qml_interaction_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
-    "QML2_IMPORT_PATH=set:${QT_ROOT}/qml"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
+    "QML2_IMPORT_PATH=set:${DOUYU_QT_QML_DIR}"
     "QT_QPA_PLATFORM=set:offscreen"
     "QT_QUICK_CONTROLS_STYLE=set:Basic"
 )
@@ -423,10 +507,10 @@ add_executable(qml_close_regression_test
     src/ui/workspace_model.cpp
     src/ui/monitoring_model.cpp
     src/ui/mpv_quick_item.cpp
-    src/app/windows_notification_service.cpp
+    ${DOUYU_NOTIFICATION_SERVICE_SOURCES}
     src/app/update_checker.cpp
     src/app/maozi_rank_client.cpp
-    src/app/windows_tray_service.cpp
+    ${DOUYU_TRAY_SERVICE_SOURCES}
     src/workspace/quality_policy.cpp
     src/workspace/native_workspace_types.cpp
     src/workspace/native_workspace_store.cpp
@@ -489,25 +573,25 @@ qt_add_resources(qml_close_regression_test qml_close_regression_test_resources
         app/qml/dialogs/TeamManagerDialog.qml
         ${DOUYU_QML_ICON_ASSETS}
 )
-add_custom_command(TARGET qml_close_regression_test POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${MPV_RUNTIME_DLL}"
-        "$<TARGET_FILE_DIR:qml_close_regression_test>/mpv.dll"
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "$<TARGET_FILE_DIR:qml_close_regression_test>/platforms"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${QT_ROOT}/plugins/platforms/qoffscreen.dll"
-        "$<TARGET_FILE_DIR:qml_close_regression_test>/platforms/qoffscreen.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${QT_ROOT}/plugins/platforms/qwindows.dll"
-        "$<TARGET_FILE_DIR:qml_close_regression_test>/platforms/qwindows.dll"
-)
+douyu_copy_mpv_runtime(qml_close_regression_test)
+if(WIN32)
+    add_custom_command(TARGET qml_close_regression_test POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:qml_close_regression_test>/platforms"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${DOUYU_QT_PLUGIN_DIR}/platforms/qoffscreen.dll"
+            "$<TARGET_FILE_DIR:qml_close_regression_test>/platforms/qoffscreen.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${DOUYU_QT_PLUGIN_DIR}/platforms/qwindows.dll"
+            "$<TARGET_FILE_DIR:qml_close_regression_test>/platforms/qwindows.dll"
+    )
+endif()
 add_test(NAME qml_close_regression_test COMMAND qml_close_regression_test)
 set_property(TEST qml_close_regression_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
-    "QML2_IMPORT_PATH=set:${QT_ROOT}/qml"
-    "QT_QPA_PLATFORM=set:windows"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
+    "QML2_IMPORT_PATH=set:${DOUYU_QT_QML_DIR}"
+    "QT_QPA_PLATFORM=set:${DOUYU_TEST_QPA_PLATFORM}"
     "QT_QUICK_CONTROLS_STYLE=set:Basic"
     "DOUYU_PERF_ROOM_COUNT=set:${DOUYU_CAPACITY_TEST_ROOM_COUNT}"
 )
@@ -532,9 +616,9 @@ qt_add_resources(qml_danmaku_overlay_test qml_danmaku_overlay_test_resources
 )
 add_test(NAME qml_danmaku_overlay_test COMMAND qml_danmaku_overlay_test)
 set_property(TEST qml_danmaku_overlay_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
-    "QML2_IMPORT_PATH=set:${QT_ROOT}/qml"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
+    "QML2_IMPORT_PATH=set:${DOUYU_QT_QML_DIR}"
     "QT_QPA_PLATFORM=set:offscreen"
     "QT_QUICK_CONTROLS_STYLE=set:Basic"
 )
@@ -575,8 +659,8 @@ target_link_libraries(update_checker_test PRIVATE
 target_include_directories(update_checker_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME update_checker_test COMMAND update_checker_test)
 set_property(TEST update_checker_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
 )
 
 add_executable(maozi_rank_client_test
@@ -591,8 +675,8 @@ target_link_libraries(maozi_rank_client_test PRIVATE
 target_include_directories(maozi_rank_client_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME maozi_rank_client_test COMMAND maozi_rank_client_test)
 set_property(TEST maozi_rank_client_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
 )
 
 add_executable(app_controller_test
@@ -603,10 +687,10 @@ add_executable(app_controller_test
     src/ui/workspace_model.cpp
     src/ui/monitoring_model.cpp
     src/ui/mpv_quick_item.cpp
-    src/app/windows_notification_service.cpp
+    ${DOUYU_NOTIFICATION_SERVICE_SOURCES}
     src/app/update_checker.cpp
     src/app/maozi_rank_client.cpp
-    src/app/windows_tray_service.cpp
+    ${DOUYU_TRAY_SERVICE_SOURCES}
     src/workspace/quality_policy.cpp
     src/workspace/native_workspace_types.cpp
     src/workspace/native_workspace_store.cpp
@@ -636,16 +720,12 @@ target_compile_definitions(app_controller_test PRIVATE
     FAKE_STREAMGET_SERVICE_PATH="$<TARGET_FILE:fake_streamget_service>"
 )
 add_dependencies(app_controller_test fake_streamget_service)
-add_custom_command(TARGET app_controller_test POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${MPV_RUNTIME_DLL}"
-        "$<TARGET_FILE_DIR:app_controller_test>/mpv.dll"
-)
+douyu_copy_mpv_runtime(app_controller_test)
 add_test(NAME app_controller_test COMMAND app_controller_test)
 set_property(TEST app_controller_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
-    "QML2_IMPORT_PATH=set:${QT_ROOT}/qml"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
+    "QML2_IMPORT_PATH=set:${DOUYU_QT_QML_DIR}"
 )
 
 add_executable(mpv_quick_item_test
@@ -663,16 +743,12 @@ target_link_libraries(mpv_quick_item_test PRIVATE
 )
 target_include_directories(mpv_quick_item_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(mpv_quick_item_test PRIVATE DOUYU_TESTING)
-add_custom_command(TARGET mpv_quick_item_test POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${MPV_RUNTIME_DLL}"
-        "$<TARGET_FILE_DIR:mpv_quick_item_test>/mpv.dll"
-)
+douyu_copy_mpv_runtime(mpv_quick_item_test)
 add_test(NAME mpv_quick_item_test COMMAND mpv_quick_item_test)
 set_property(TEST mpv_quick_item_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
-    "QML2_IMPORT_PATH=set:${QT_ROOT}/qml"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
+    "QML2_IMPORT_PATH=set:${DOUYU_QT_QML_DIR}"
 )
 
 add_library(stream_service STATIC
@@ -704,7 +780,7 @@ target_link_libraries(douyu_danmaku_protocol_test PRIVATE Qt6::Core Qt6::Test)
 target_include_directories(douyu_danmaku_protocol_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME douyu_danmaku_protocol_test COMMAND douyu_danmaku_protocol_test)
 set_tests_properties(douyu_danmaku_protocol_test PROPERTIES
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${QT_ROOT}/bin"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
 )
 
 add_executable(danmaku_governance_test
@@ -716,7 +792,7 @@ target_link_libraries(danmaku_governance_test PRIVATE Qt6::Core Qt6::Test)
 target_include_directories(danmaku_governance_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME danmaku_governance_test COMMAND danmaku_governance_test)
 set_tests_properties(danmaku_governance_test PROPERTIES
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${QT_ROOT}/bin"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
 )
 
 add_library(douyu_danmaku STATIC
@@ -739,7 +815,7 @@ target_link_libraries(douyu_danmaku_client_test PRIVATE douyu_danmaku Qt6::Core 
 target_include_directories(douyu_danmaku_client_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME douyu_danmaku_client_test COMMAND douyu_danmaku_client_test)
 set_tests_properties(douyu_danmaku_client_test PROPERTIES
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${QT_ROOT}/bin"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
 )
 
 add_executable(danmaku_session_manager_test
@@ -750,7 +826,7 @@ target_link_libraries(danmaku_session_manager_test PRIVATE douyu_danmaku Qt6::Co
 target_include_directories(danmaku_session_manager_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME danmaku_session_manager_test COMMAND danmaku_session_manager_test)
 set_tests_properties(danmaku_session_manager_test PROPERTIES
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${QT_ROOT}/bin"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
 )
 
 add_executable(application_logger_test
@@ -761,7 +837,7 @@ target_link_libraries(application_logger_test PRIVATE Qt6::Core Qt6::Test)
 target_include_directories(application_logger_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME application_logger_test COMMAND application_logger_test)
 set_tests_properties(application_logger_test PROPERTIES
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${QT_ROOT}/bin"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
 )
 
 add_executable(fake_streamget_service
@@ -849,39 +925,39 @@ target_link_libraries(favorite_monitor_test
 target_include_directories(favorite_monitor_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME favorite_monitor_test COMMAND favorite_monitor_test)
 set_property(TEST favorite_monitor_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
-    "QML2_IMPORT_PATH=set:${QT_ROOT}/qml"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
+    "QML2_IMPORT_PATH=set:${DOUYU_QT_QML_DIR}"
 )
 
-add_executable(windows_notification_service_test
-    tests/windows_notification_service_test.cpp
-    src/app/windows_notification_service.cpp
+add_executable(system_notification_service_test
+    tests/system_notification_service_test.cpp
+    ${DOUYU_NOTIFICATION_SERVICE_SOURCES}
     src/workspace/notification_policy.cpp
 )
-target_link_libraries(windows_notification_service_test
+target_link_libraries(system_notification_service_test
     PRIVATE
         Qt6::Core
         Qt6::Test
 )
-target_include_directories(windows_notification_service_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-add_test(NAME windows_notification_service_test COMMAND windows_notification_service_test)
+target_include_directories(system_notification_service_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_test(NAME system_notification_service_test COMMAND system_notification_service_test)
 
-add_executable(windows_tray_service_test
-    tests/windows_tray_service_test.cpp
-    src/app/windows_tray_service.cpp
+add_executable(system_tray_service_test
+    tests/system_tray_service_test.cpp
+    ${DOUYU_TRAY_SERVICE_SOURCES}
 )
-target_link_libraries(windows_tray_service_test
+target_link_libraries(system_tray_service_test
     PRIVATE
         Qt6::Core
         Qt6::Gui
         Qt6::Test
 )
-target_include_directories(windows_tray_service_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_compile_definitions(windows_tray_service_test PRIVATE DOUYU_TESTING)
-add_test(NAME windows_tray_service_test COMMAND windows_tray_service_test)
-set_property(TEST windows_tray_service_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
+target_include_directories(system_tray_service_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_definitions(system_tray_service_test PRIVATE DOUYU_TESTING)
+add_test(NAME system_tray_service_test COMMAND system_tray_service_test)
+set_property(TEST system_tray_service_test PROPERTY ENVIRONMENT_MODIFICATION
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
 )
 
 add_executable(room_session_test
@@ -904,16 +980,12 @@ target_compile_definitions(room_session_test PRIVATE
     DOUYU_TESTING
     FAKE_STREAMGET_SERVICE_PATH="$<TARGET_FILE:fake_streamget_service>"
 )
-add_custom_command(TARGET room_session_test POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${MPV_RUNTIME_DLL}"
-        "$<TARGET_FILE_DIR:room_session_test>/mpv.dll"
-)
+douyu_copy_mpv_runtime(room_session_test)
 add_test(NAME room_session_test COMMAND room_session_test)
 set_property(TEST room_session_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
-    "QML2_IMPORT_PATH=set:${QT_ROOT}/qml"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
+    "QML2_IMPORT_PATH=set:${DOUYU_QT_QML_DIR}"
 )
 
 add_executable(multi_room_coordinator_test
@@ -940,16 +1012,12 @@ target_compile_definitions(multi_room_coordinator_test PRIVATE
     DOUYU_TESTING
     FAKE_STREAMGET_SERVICE_PATH="$<TARGET_FILE:fake_streamget_service>"
 )
-add_custom_command(TARGET multi_room_coordinator_test POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${MPV_RUNTIME_DLL}"
-        "$<TARGET_FILE_DIR:multi_room_coordinator_test>/mpv.dll"
-)
+douyu_copy_mpv_runtime(multi_room_coordinator_test)
 add_test(NAME multi_room_coordinator_test COMMAND multi_room_coordinator_test)
 set_property(TEST multi_room_coordinator_test PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:${QT_ROOT}/bin"
-    "QT_PLUGIN_PATH=set:${QT_ROOT}/plugins"
-    "QML2_IMPORT_PATH=set:${QT_ROOT}/qml"
+    "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
+    "QT_PLUGIN_PATH=set:${DOUYU_QT_PLUGIN_DIR}"
+    "QML2_IMPORT_PATH=set:${DOUYU_QT_QML_DIR}"
     "QT_QPA_PLATFORM=set:offscreen"
 )
 
@@ -969,6 +1037,15 @@ if(DOUYU_BUILD_SERVICE_TESTS)
             "Python interpreter for the StreamGet service tests" FORCE)
     endif()
     find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND AND Python3_VERSION VERSION_LESS 3.10)
+        # The service uses PEP 604 unions evaluated at runtime, so 3.9 cannot
+        # even import it. Keep configure working and explain the requirement.
+        message(WARNING
+            "Python ${Python3_VERSION} at ${Python3_EXECUTABLE} cannot run the StreamGet "
+            "service tests. Run scripts/bootstrap-streamget-service.ps1 (or .sh) with "
+            "Python 3.10 or newer and re-configure to register them.")
+        set(Python3_Interpreter_FOUND OFF)
+    endif()
     if(Python3_Interpreter_FOUND)
         add_test(NAME streamget_service_python_tests
             COMMAND ${Python3_EXECUTABLE} -m unittest discover
@@ -1010,9 +1087,9 @@ add_executable(douyu_monitor_native
     src/workspace/quality_policy.cpp
     src/workspace/native_workspace_types.cpp
     src/workspace/native_workspace_store.cpp
-    src/app/windows_notification_service.cpp
+    ${DOUYU_NOTIFICATION_SERVICE_SOURCES}
     src/app/update_checker.cpp
-    src/app/windows_tray_service.cpp
+    ${DOUYU_TRAY_SERVICE_SOURCES}
     src/workspace/notification_policy.cpp
     src/workspace/room_session.cpp
     src/workspace/room_status_scheduler.cpp
@@ -1027,19 +1104,51 @@ add_executable(douyu_monitor_native
     src/ui/monitoring_model.cpp
 )
 
-set_target_properties(douyu_monitor_native PROPERTIES
-    WIN32_EXECUTABLE TRUE
-)
+if(APPLE)
+    set_target_properties(douyu_monitor_native PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/app/resources/MacOSXBundleInfo.plist.in"
+        MACOSX_BUNDLE_ICON_FILE douyu_monitor.icns
+        MACOSX_BUNDLE_BUNDLE_NAME DouyuMonitor
+        MACOSX_BUNDLE_GUI_IDENTIFIER com.douyu-monitor.native
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    )
+    set_source_files_properties(app/assets/douyu_monitor.icns PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources"
+    )
+    target_sources(douyu_monitor_native PRIVATE app/assets/douyu_monitor.icns)
+else()
+    set_target_properties(douyu_monitor_native PROPERTIES
+        WIN32_EXECUTABLE TRUE
+    )
+endif()
 
 if(WIN32)
     target_sources(douyu_monitor_native PRIVATE app/resources/app_icon.rc)
-    qt_add_resources(douyu_monitor_native native_app_icon
-        PREFIX "/app"
-        BASE "${CMAKE_CURRENT_SOURCE_DIR}"
-        FILES
-            app/assets/douyu_monitor.ico
-    )
+endif()
 
+# Windows keeps the multi-resolution .ico; macOS/Linux use a PNG because the
+# status item and window icon are built from QIcon. The alias keeps the runtime
+# path at :/app/assets/... for app/main.cpp and system_tray_service_mac.mm.
+if(WIN32)
+    set(DOUYU_APP_ICON_FILE app/assets/douyu_monitor.ico)
+    set(DOUYU_APP_ICON_ALIAS assets/douyu_monitor.ico)
+else()
+    set(DOUYU_APP_ICON_FILE app/assets/douyu_monitor.png)
+    set(DOUYU_APP_ICON_ALIAS assets/douyu_monitor.png)
+endif()
+set_source_files_properties(${DOUYU_APP_ICON_FILE} PROPERTIES
+    QT_RESOURCE_ALIAS "${DOUYU_APP_ICON_ALIAS}"
+)
+qt_add_resources(douyu_monitor_native native_app_icon
+    PREFIX "/app"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}"
+    FILES
+        ${DOUYU_APP_ICON_FILE}
+)
+
+if(WIN32)
     add_executable(douyu_monitor_uninstaller WIN32
         app/uninstaller_main.cpp
         app/resources/app_icon.rc
@@ -1073,18 +1182,38 @@ target_compile_definitions(douyu_monitor_native PRIVATE
 if(WIN32)
     target_link_libraries(app_controller_test PRIVATE Shell32 User32)
     target_link_libraries(qml_close_regression_test PRIVATE Shell32 User32)
-    target_link_libraries(windows_notification_service_test PRIVATE Shell32 User32)
-    target_link_libraries(windows_tray_service_test PRIVATE Shell32 User32)
+    target_link_libraries(system_notification_service_test PRIVATE Shell32 User32)
+    target_link_libraries(system_tray_service_test PRIVATE Shell32 User32)
     target_link_libraries(douyu_monitor_native PRIVATE Shell32 User32)
+elseif(APPLE)
+    # Every target that compiles the macOS platform services needs the
+    # UserNotifications and AppKit frameworks.
+    set(DOUYU_MACOS_FRAMEWORKS
+        ${DOUYU_APPKIT_FRAMEWORK}
+        ${DOUYU_USER_NOTIFICATIONS_FRAMEWORK}
+    )
+    target_link_libraries(app_controller_test PRIVATE ${DOUYU_MACOS_FRAMEWORKS})
+    target_link_libraries(qml_close_regression_test PRIVATE ${DOUYU_MACOS_FRAMEWORKS})
+    target_link_libraries(system_notification_service_test PRIVATE ${DOUYU_MACOS_FRAMEWORKS})
+    target_link_libraries(system_tray_service_test PRIVATE ${DOUYU_MACOS_FRAMEWORKS})
+    target_link_libraries(douyu_monitor_native PRIVATE ${DOUYU_MACOS_FRAMEWORKS})
 endif()
 
+# The frozen service is a directory tree. macOS only allows code directly under
+# Contents/MacOS, so the bundle keeps the service in Contents/Resources where it
+# is sealed as data instead of being validated as a nested bundle.
+if(APPLE)
+    set(DOUYU_SERVICE_DEST_DIR "$<TARGET_BUNDLE_CONTENT_DIR:douyu_monitor_native>/Resources")
+else()
+    set(DOUYU_SERVICE_DEST_DIR "$<TARGET_FILE_DIR:douyu_monitor_native>")
+endif()
+
+douyu_copy_mpv_runtime(douyu_monitor_native)
+
 add_custom_command(TARGET douyu_monitor_native POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${MPV_RUNTIME_DLL}"
-        "$<TARGET_FILE_DIR:douyu_monitor_native>/mpv.dll"
     COMMAND "${CMAKE_COMMAND}"
         -DSERVICE_SOURCE:PATH=${CMAKE_CURRENT_SOURCE_DIR}/out/service/streamget_service
-        -DSERVICE_DEST:PATH=$<TARGET_FILE_DIR:douyu_monitor_native>
+        -DSERVICE_DEST:PATH=${DOUYU_SERVICE_DEST_DIR}
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_streamget_service.cmake"
     VERBATIM
 )
@@ -1142,11 +1271,7 @@ add_test(NAME douyu_monitor_native_self_test COMMAND douyu_monitor_native --self
 
 add_executable(mpv_dependency_probe tests/mpv_dependency_probe.cpp)
 target_link_libraries(mpv_dependency_probe PRIVATE mpv::mpv)
-add_custom_command(TARGET mpv_dependency_probe POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${MPV_RUNTIME_DLL}"
-        "$<TARGET_FILE_DIR:mpv_dependency_probe>/mpv.dll"
-)
+douyu_copy_mpv_runtime(mpv_dependency_probe)
 add_test(NAME mpv_dependency_probe COMMAND mpv_dependency_probe)
 
 # Qt Test is an SDK-only dependency; keep the deployed application self-test
@@ -1161,9 +1286,9 @@ set_tests_properties(
     native_workspace_store_test
     room_status_scheduler_test
     notification_policy_test
-    windows_notification_service_test
+    system_notification_service_test
     media_source_test
     native_self_test_media
     PROPERTIES ENVIRONMENT_MODIFICATION
-        "PATH=path_list_prepend:${QT_ROOT}/bin"
+        "PATH=path_list_prepend:${DOUYU_QT_BIN_DIR}"
 )

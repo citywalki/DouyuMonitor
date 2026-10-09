@@ -1,6 +1,6 @@
 # DouyuMonitor
 
-DouyuMonitor 是基于 Qt Quick/QML、C++ 和 libmpv 的 Windows x64 斗鱼多直播间监看工具。当前 `main` 只维护原生 Qt 实现，正式版布局最多支持 16 路并全部解码，24 路全解码测试版通过独立构建开关生成；旧 Electron/TypeScript 实现已从 `main` 移除，并保存在 `legacy-framework` 分支供历史追溯。
+DouyuMonitor 是基于 Qt Quick/QML、C++ 和 libmpv 的斗鱼多直播间监看工具，当前维护 Windows x64 与 macOS（Apple Silicon）两个桌面构建。当前 `main` 只维护原生 Qt 实现，正式版布局最多支持 16 路并全部解码，24 路全解码测试版通过独立构建开关生成；旧 Electron/TypeScript 实现已从 `main` 移除，并保存在 `legacy-framework` 分支供历史追溯。
 
 ## 界面预览
 
@@ -57,22 +57,25 @@ DouyuMonitor 是基于 Qt Quick/QML、C++ 和 libmpv 的 Windows x64 斗鱼多�
 - 声音总控、单声道/多声道、独立音量和默认音频焦点
 - StreamGet 动态清晰度列表、播放源重试和状态 Toast
 - 应用级全屏，支持 F11 切换和 Escape 退出
-- Windows 系统通知、快捷键和关闭生命周期保护
-- Windows 托盘后台托管：隐藏窗口后继续保留音频、状态检测和通知，暂停视频与弹幕渲染；从托盘恢复时自动重新渲染
+- 系统通知（Windows Shell_NotifyIcon / macOS UserNotifications）、快捷键和关闭生命周期保护
+- 系统托盘后台托管：隐藏窗口后继续保留音频、状态检测和通知，暂停视频与弹幕渲染；从托盘恢复时自动重新渲染
 
 ## 技术边界
 
 - UI：Qt Quick/QML
 - 应用逻辑：C++20
-- 播放：libmpv + OpenGL（发布目录加载名为 `mpv.dll`）
-- 斗鱼解析：独立 `streamget_service.exe` 子进程
+- 播放：libmpv + OpenGL（Windows 发布目录加载名为 `mpv.dll`，macOS 链接 `libmpv.2.dylib`）
+- 斗鱼解析：独立的 StreamGet 服务子进程（Windows `streamget_service.exe`，macOS `streamget_service`）
 - 弹幕：Qt WebSockets 原生客户端
-- 安装器：Inno Setup 6 Windows 安装器
-- 不使用 Electron、Chromium、Node.js、Qt WebEngine 或网页播放器
+- 托盘与系统通知：Windows 使用 Shell_NotifyIcon，macOS 使用 NSStatusItem 与 UserNotifications
+- 交付物：Inno Setup 6 Windows 安装器、macOS `.app`（ad-hoc 签名，未公证）
+- 不使用 Electron、Chromium、Node.js、Qt WebEngine、Qt Widgets 或网页播放器
 
 ## 快速开始
 
 ### 环境要求
+
+Windows x64：
 
 - Windows x64
 - Visual Studio 2022，含 MSVC x64 工具链
@@ -80,7 +83,13 @@ DouyuMonitor 是基于 Qt Quick/QML、C++ 和 libmpv 的 Windows x64 斗鱼多�
 - Qt `6.8.3` MSVC 2022 x64
 - 已准备好的 libmpv SDK，包含头文件、`libmpv.lib` 和 `libmpv-2.dll`
 
-### 配置和构建
+macOS（Apple Silicon）：
+
+- macOS 13 或更高版本、Xcode Command Line Tools
+- Homebrew Qt 与 libmpv：`brew install qt mpv ninja`
+- CMake 3.24 或更高版本
+
+### Windows 构建
 
 在项目根目录的 Visual Studio x64 Developer PowerShell 中设置依赖路径：
 
@@ -105,6 +114,39 @@ ctest --preset windows-x64-release
 ```
 
 关闭窗口或最小化会进入 Windows 托盘后台托管，不会停止直播音频、StreamGet 或状态通知。需要真正退出时，在托盘图标右键选择“退出程序”；托盘双击或选择“显示窗口”可恢复画面和弹幕。
+
+### macOS 构建
+
+依赖由 Homebrew 提供，无需设置 `MPV_ROOT`：
+
+```bash
+brew install qt mpv ninja
+cd native
+cmake --preset macos-arm64-release
+cmake --build --preset macos-arm64-release --target douyu_monitor_native
+ctest --preset macos-arm64-release
+```
+
+开发运行：
+
+```bash
+open out/build/macos-arm64-release/douyu_monitor_native.app
+```
+
+StreamGet 服务：
+
+```bash
+./scripts/bootstrap-streamget-service.sh
+./scripts/build-streamget-service.sh
+```
+
+生成可分发的应用包（内嵌 Qt 与 libmpv 依赖，ad-hoc 签名）：
+
+```bash
+./scripts/bundle-macos-app.sh
+```
+
+输出 `native/out/installer/DouyuMonitor.app`。关闭窗口或最小化会进入状态栏托管，菜单提供“显示窗口”和“退出程序”；系统通知首次使用需要在系统设置中授权。
 
 ### 构建 Windows 安装包
 

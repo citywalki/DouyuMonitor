@@ -29,15 +29,26 @@
 
 ## 前置条件
 
+Windows x64：
+
 - Windows x64
 - Visual Studio 2022（MSVC x64 工具链）
 - CMake 3.24 或更高版本、Ninja
 - Qt 6.8.3 MSVC 2022 x64
 - libmpv SDK：`include/mpv/client.h`、`libmpv.lib`、`libmpv-2.dll`
 
-`vcpkg-configuration.json` 固定项目依赖基线。libmpv 不通过 vcpkg 分发，必须由 `MPV_ROOT` 显式指定。
+macOS（Apple Silicon）：
+
+- macOS 13 或更高版本、Xcode Command Line Tools
+- Homebrew Qt（`brew install qt`）与 libmpv（`brew install mpv`）
+- CMake 3.24 或更高版本、Ninja（`brew install ninja`）
+- 使用独立 libmpv SDK 构建时，把 `MPV_ROOT` 指向包含 `include/mpv/client.h` 和 `libmpv.dylib` 的目录
+
+`vcpkg-configuration.json` 固定项目依赖基线。libmpv 不通过 vcpkg 分发，Windows 必须由 `MPV_ROOT` 显式指定；macOS 默认从 Homebrew 前缀解析 `qt` 与 `mpv`，无需额外环境变量。
 
 ## 配置和构建
+
+### Windows
 
 在 `native` 目录内的 Visual Studio x64 Developer PowerShell 中设置环境变量：
 
@@ -70,6 +81,33 @@ native/out/build/windows-x64-release/douyu_monitor_native.exe
 
 部署步骤由 CMake 调用匹配的 `windeployqt` 完成。Release 目录必须包含 `platforms/qwindows.dll` 和按导入库实际名称部署的 `mpv.dll`；不要混用 Debug 与 Release 的 Qt DLL 或平台插件。SDK 源文件仍为 `libmpv-2.dll`，构建后会复制为应用加载名 `mpv.dll`。
 
+### macOS
+
+```bash
+brew install qt mpv ninja
+cd native
+
+cmake --preset macos-arm64-release
+cmake --build --preset macos-arm64-release --target douyu_monitor_native
+ctest --preset macos-arm64-release
+```
+
+macOS 目标构建为应用包：
+
+```text
+native/out/build/macos-arm64-release/douyu_monitor_native.app
+```
+
+Qt 由 `cmake --preset` 自动从 `brew --prefix qt` 解析；需要指定其他 SDK 时设置 `QT_ROOT`。开发构建直接使用 Homebrew 的 `libmpv.2.dylib`，无需复制运行库。应用包图标由 `app/assets/douyu_monitor.icns` 提供，状态栏和窗口图标使用同源的 `douyu_monitor.png`。
+
+生成可分发（已内嵌 Qt 与 libmpv 依赖）的应用包：
+
+```bash
+./scripts/bundle-macos-app.sh
+```
+
+输出 `native/out/installer/DouyuMonitor.app`，其中已包含 `macdeployqt` 部署的 Qt 框架、内嵌到 `Contents/Frameworks` 的 libmpv 依赖树、StreamGet 服务以及 ad-hoc 签名。仓库不提供代码签名与公证，首次运行需要在“系统设置 -> 隐私与安全性”中放行。
+
 ## StreamGet 服务
 
 准备 Python 构建环境并打包服务：
@@ -79,6 +117,15 @@ native/out/build/windows-x64-release/douyu_monitor_native.exe
 .\scripts\build-streamget-service.ps1
 ```
 
+macOS/Linux：
+
+```bash
+./scripts/bootstrap-streamget-service.sh
+./scripts/build-streamget-service.sh
+```
+
+Windows 产物是 `native/out/service/streamget_service/streamget_service.exe`，macOS 产物是同目录下的 `streamget_service`。主程序按平台可执行文件名查找服务：Windows 安装在程序目录或其 `streamget_service` 子目录，macOS 应用包使用 `Contents/Resources/streamget_service`（`Contents/MacOS` 下的嵌套目录无法通过代码签名校验）。
+
 服务以私有 JSONL stdin/stdout 协议运行。主程序只在内存中持有当前播放会话的地址；不会持久化播放 URL、查询参数、Cookie、Token、签名、原始弹幕帧或原始服务诊断。
 
 搜索结果的可选布尔字段 `statusKnown` 默认 `true`，兼容旧服务。名单提示在元数据查询失败时使用 `statusKnown: false`；此时 `online` 不是权威开播状态，界面显示“状态未知”，不触发离线通知。精确名单查询补充房间资料，模糊查询合并名单与远程结果并按房间号去重。
@@ -87,14 +134,22 @@ native/out/build/windows-x64-release/douyu_monitor_native.exe
 
 ## 后台托管
 
-关闭窗口和最小化都会隐藏主窗口并进入 Windows 托盘。后台期间 StreamGet、房间状态检测、系统通知和 libmpv 音频继续运行；Qt Quick 视频渲染和弹幕展示会暂停，以降低后台资源占用。通过托盘“显示窗口”恢复时，播放器重新建立渲染上下文并恢复弹幕展示。托盘“退出程序”才会停止服务并结束应用进程。
+关闭窗口和最小化都会隐藏主窗口并进入系统托盘。Windows 使用 `Shell_NotifyIcon`，macOS 使用状态栏条目（NSStatusItem）并提供“显示窗口 / 退出程序”菜单；没有托盘后端时（例如未打包的 macOS 测试进程）应用保持前台运行。后台期间 StreamGet、房间状态检测、系统通知和 libmpv 音频继续运行；Qt Quick 视频渲染和弹幕展示会暂停，以降低后台资源占用。通过托盘“显示窗口”恢复时，播放器重新建立渲染上下文并恢复弹幕展示。托盘“退出程序”才会停止服务并结束应用进程。
+
+系统通知在 Windows 使用 Shell_NotifyIcon 气泡，在 macOS 使用 UserNotifications，需要应用包身份和用户授权；未授权时通知静默降级，其余功能不受影响。
 
 ## 自测与安装包
 
-运行程序自测：
+Windows 运行程序自测：
 
 ```powershell
 .\out\build\windows-x64-release\douyu_monitor_native.exe --self-test
+```
+
+macOS：
+
+```bash
+./out/build/macos-arm64-release/douyu_monitor_native.app/Contents/MacOS/douyu_monitor_native --self-test
 ```
 
 构建安装包：
@@ -121,6 +176,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-installer
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\generate-app-icon.ps1
+```
+
+macOS 图标（`.icns` 与运行时 PNG）从同一个 SVG 生成：
+
+```bash
+./scripts/generate-app-icon-macos.sh
 ```
 
 ## 验收边界

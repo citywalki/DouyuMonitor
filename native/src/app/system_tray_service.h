@@ -4,12 +4,15 @@
 
 class QWindow;
 
-class WindowsTrayService final : public QObject {
+// Tray integration: Win32 Shell_NotifyIcon on Windows, NSStatusItem on macOS
+// (src/app/system_tray_service_mac.mm). Platforms without a tray backend
+// report `start() == false` and the application falls back to direct control.
+class SystemTrayService final : public QObject {
     Q_OBJECT
 
 public:
-    explicit WindowsTrayService(QObject *parent = nullptr);
-    ~WindowsTrayService() override;
+    explicit SystemTrayService(QObject *parent = nullptr);
+    ~SystemTrayService() override;
 
     bool start(QWindow *window);
     void stop();

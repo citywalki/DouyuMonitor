@@ -2,7 +2,7 @@
 #include <QTemporaryDir>
 #include <QtTest/QtTest>
 
-#include "app/windows_notification_service.h"
+#include "app/system_notification_service.h"
 
 class FakeNotificationSink final : public SystemNotificationSink {
 public:
@@ -18,7 +18,7 @@ public:
     QStringList bodies;
 };
 
-class WindowsNotificationServiceTest final : public QObject {
+class SystemNotificationServiceTest final : public QObject {
     Q_OBJECT
 
 private slots:
@@ -29,14 +29,14 @@ private slots:
     void limitsEventsAcrossSources();
 };
 
-void WindowsNotificationServiceTest::filtersEventsByPreferences()
+void SystemNotificationServiceTest::filtersEventsByPreferences()
 {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     QSettings settings(directory.filePath(QStringLiteral("notifications.ini")),
                        QSettings::IniFormat);
     FakeNotificationSink sink;
-    WindowsNotificationService service(&settings, &sink);
+    SystemNotificationService service(&settings, &sink);
 
     NotificationEvent online;
     online.type = NotificationEventType::RoomOnline;
@@ -59,33 +59,33 @@ void WindowsNotificationServiceTest::filtersEventsByPreferences()
     QVERIFY(!service.deliver(online));
 }
 
-void WindowsNotificationServiceTest::persistsPreferences()
+void SystemNotificationServiceTest::persistsPreferences()
 {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     QSettings settings(directory.filePath(QStringLiteral("notifications.ini")),
                        QSettings::IniFormat);
     FakeNotificationSink sink;
-    WindowsNotificationService service(&settings, &sink);
+    SystemNotificationService service(&settings, &sink);
 
     auto preferences = service.preferences();
     preferences.enabled = false;
     preferences.roomOffline = false;
     QVERIFY(service.setPreferences(preferences));
 
-    WindowsNotificationService restored(&settings, &sink);
+    SystemNotificationService restored(&settings, &sink);
     QCOMPARE(restored.preferences().enabled, false);
     QCOMPARE(restored.preferences().roomOffline, false);
 }
 
-void WindowsNotificationServiceTest::filtersFavoriteTitleChanges()
+void SystemNotificationServiceTest::filtersFavoriteTitleChanges()
 {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     QSettings settings(directory.filePath(QStringLiteral("notifications.ini")),
                        QSettings::IniFormat);
     FakeNotificationSink sink;
-    WindowsNotificationService service(&settings, &sink);
+    SystemNotificationService service(&settings, &sink);
 
     NotificationEvent event;
     event.type = NotificationEventType::FavoriteTitleChanged;
@@ -101,14 +101,14 @@ void WindowsNotificationServiceTest::filtersFavoriteTitleChanges()
     QCOMPARE(sink.bodies.size(), 1);
 }
 
-void WindowsNotificationServiceTest::suppressesDuplicateEventsAcrossSources()
+void SystemNotificationServiceTest::suppressesDuplicateEventsAcrossSources()
 {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     QSettings settings(directory.filePath(QStringLiteral("notifications.ini")),
                        QSettings::IniFormat);
     FakeNotificationSink sink;
-    WindowsNotificationService service(&settings, &sink);
+    SystemNotificationService service(&settings, &sink);
 
     NotificationEvent event;
     event.type = NotificationEventType::RoomOnline;
@@ -121,14 +121,14 @@ void WindowsNotificationServiceTest::suppressesDuplicateEventsAcrossSources()
     QCOMPARE(sink.bodies.size(), 1);
 }
 
-void WindowsNotificationServiceTest::limitsEventsAcrossSources()
+void SystemNotificationServiceTest::limitsEventsAcrossSources()
 {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     QSettings settings(directory.filePath(QStringLiteral("notifications.ini")),
                        QSettings::IniFormat);
     FakeNotificationSink sink;
-    WindowsNotificationService service(&settings, &sink);
+    SystemNotificationService service(&settings, &sink);
 
     for (int index = 0; index < 6; ++index) {
         NotificationEvent event;
@@ -148,6 +148,6 @@ void WindowsNotificationServiceTest::limitsEventsAcrossSources()
     QCOMPARE(sink.bodies.size(), 6);
 }
 
-QTEST_GUILESS_MAIN(WindowsNotificationServiceTest)
+QTEST_GUILESS_MAIN(SystemNotificationServiceTest)
 
-#include "windows_notification_service_test.moc"
+#include "system_notification_service_test.moc"

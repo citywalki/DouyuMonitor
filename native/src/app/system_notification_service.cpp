@@ -1,4 +1,4 @@
-#include "app/windows_notification_service.h"
+#include "app/system_notification_service.h"
 
 #include <QDateTime>
 #include <QSettings>
@@ -7,6 +7,8 @@
 #define NOMINMAX
 #include <windows.h>
 #include <shellapi.h>
+#elif defined(Q_OS_MACOS)
+#include "app/system_notification_mac.h"
 #endif
 
 namespace {
@@ -118,7 +120,7 @@ QString key(NotificationEventType type)
 
 } // namespace
 
-WindowsNotificationService::WindowsNotificationService(QSettings *settings,
+SystemNotificationService::SystemNotificationService(QSettings *settings,
                                                        SystemNotificationSink *sink,
                                                        QObject *parent)
     : QObject(parent)
@@ -127,19 +129,24 @@ WindowsNotificationService::WindowsNotificationService(QSettings *settings,
 {
     loadPreferences();
     if (sink_ == nullptr) {
+        // Windows keeps its Shell_NotifyIcon sink; macOS uses UserNotifications.
+#ifdef Q_OS_WIN
         ownedSink_ = std::make_unique<Win32NotificationSink>();
+#elif defined(Q_OS_MACOS)
+        ownedSink_ = douyuCreateMacNotificationSink();
+#endif
         sink_ = ownedSink_.get();
     }
 }
 
-WindowsNotificationService::~WindowsNotificationService() = default;
+SystemNotificationService::~SystemNotificationService() = default;
 
-NotificationPreferences WindowsNotificationService::preferences() const noexcept
+NotificationPreferences SystemNotificationService::preferences() const noexcept
 {
     return preferences_;
 }
 
-bool WindowsNotificationService::setPreferences(NotificationPreferences preferences)
+bool SystemNotificationService::setPreferences(NotificationPreferences preferences)
 {
     preferences_ = preferences;
     if (settings_ == nullptr) {
@@ -165,7 +172,7 @@ bool WindowsNotificationService::setPreferences(NotificationPreferences preferen
     return true;
 }
 
-bool WindowsNotificationService::deliver(const NotificationEvent &event)
+bool SystemNotificationService::deliver(const NotificationEvent &event)
 {
     if (!preferences_.enabled || !isEnabled(event.type) || sink_ == nullptr
         || !sink_->available()) {
@@ -195,18 +202,18 @@ bool WindowsNotificationService::deliver(const NotificationEvent &event)
     return true;
 }
 
-QString WindowsNotificationService::eventKey(const NotificationEvent &event)
+QString SystemNotificationService::eventKey(const NotificationEvent &event)
 {
     return event.roomId + QLatin1Char(':')
         + QString::number(static_cast<int>(event.type));
 }
 
-QString WindowsNotificationService::statusText() const
+QString SystemNotificationService::statusText() const
 {
     return statusText_;
 }
 
-void WindowsNotificationService::loadPreferences()
+void SystemNotificationService::loadPreferences()
 {
     if (settings_ == nullptr) return;
     preferences_.enabled =
@@ -223,7 +230,7 @@ void WindowsNotificationService::loadPreferences()
         settings_->value(QStringLiteral("notifications/favoriteTitleChanged"), true).toBool();
 }
 
-bool WindowsNotificationService::isEnabled(NotificationEventType type) const noexcept
+bool SystemNotificationService::isEnabled(NotificationEventType type) const noexcept
 {
     switch (type) {
     case NotificationEventType::RoomOnline:

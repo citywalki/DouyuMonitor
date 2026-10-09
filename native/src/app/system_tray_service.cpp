@@ -1,4 +1,4 @@
-#include "app/windows_tray_service.h"
+#include "app/system_tray_service.h"
 
 #include <QWindow>
 
@@ -35,9 +35,9 @@ ATOM ensureWindowClass(HINSTANCE instance, WNDPROC procedure)
 
 } // namespace
 
-class WindowsTrayService::Private {
+class SystemTrayService::Private {
 public:
-    WindowsTrayService *owner = nullptr;
+    SystemTrayService *owner = nullptr;
     QWindow *window = nullptr;
     HWND messageWindow = nullptr;
     NOTIFYICONDATAW icon{};
@@ -45,11 +45,11 @@ public:
 
 static LRESULT CALLBACK trayWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    auto *state = reinterpret_cast<WindowsTrayService::Private *>(
+    auto *state = reinterpret_cast<SystemTrayService::Private *>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
         const auto *create = reinterpret_cast<const CREATESTRUCTW *>(lParam);
-        state = static_cast<WindowsTrayService::Private *>(create->lpCreateParams);
+        state = static_cast<SystemTrayService::Private *>(create->lpCreateParams);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
     }
 
@@ -85,19 +85,19 @@ static LRESULT CALLBACK trayWindowProc(HWND hwnd, UINT message, WPARAM wParam, L
     return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
-WindowsTrayService::WindowsTrayService(QObject *parent)
+SystemTrayService::SystemTrayService(QObject *parent)
     : QObject(parent), d_(new Private)
 {
     d_->owner = this;
 }
 
-WindowsTrayService::~WindowsTrayService()
+SystemTrayService::~SystemTrayService()
 {
     stop();
     delete d_;
 }
 
-bool WindowsTrayService::start(QWindow *window)
+bool SystemTrayService::start(QWindow *window)
 {
     if (d_->messageWindow != nullptr) return true;
     d_->window = window;
@@ -134,7 +134,7 @@ bool WindowsTrayService::start(QWindow *window)
     return true;
 }
 
-void WindowsTrayService::stop()
+void SystemTrayService::stop()
 {
     if (d_->messageWindow == nullptr) return;
     Shell_NotifyIconW(NIM_DELETE, &d_->icon);
@@ -143,18 +143,72 @@ void WindowsTrayService::stop()
     d_->window = nullptr;
 }
 
-bool WindowsTrayService::isRunning() const noexcept
+bool SystemTrayService::isRunning() const noexcept
 {
     return d_->messageWindow != nullptr;
 }
 
 #ifdef DOUYU_TESTING
-void WindowsTrayService::triggerShowForTest()
+void SystemTrayService::triggerShowForTest()
 {
     emit showRequested();
 }
 
-void WindowsTrayService::triggerQuitForTest()
+void SystemTrayService::triggerQuitForTest()
+{
+    emit quitRequested();
+}
+#endif
+
+#elif defined(Q_OS_MACOS)
+
+#include "app/system_tray_service_mac.h"
+
+class SystemTrayService::Private {
+public:
+    void *handle = nullptr;
+};
+
+SystemTrayService::SystemTrayService(QObject *parent)
+    : QObject(parent), d_(new Private)
+{
+}
+
+SystemTrayService::~SystemTrayService()
+{
+    stop();
+    delete d_;
+}
+
+bool SystemTrayService::start(QWindow *window)
+{
+    if (d_->handle != nullptr) return true;
+    // The status item is independent of the window, but a window must exist
+    // before the application is allowed to host background services.
+    if (window == nullptr) return false;
+    d_->handle = douyuMacTrayStart(this);
+    return d_->handle != nullptr;
+}
+
+void SystemTrayService::stop()
+{
+    if (d_->handle == nullptr) return;
+    douyuMacTrayStop(d_->handle);
+    d_->handle = nullptr;
+}
+
+bool SystemTrayService::isRunning() const noexcept
+{
+    return d_->handle != nullptr;
+}
+
+#ifdef DOUYU_TESTING
+void SystemTrayService::triggerShowForTest()
+{
+    emit showRequested();
+}
+
+void SystemTrayService::triggerQuitForTest()
 {
     emit quitRequested();
 }
@@ -162,39 +216,41 @@ void WindowsTrayService::triggerQuitForTest()
 
 #else
 
-class WindowsTrayService::Private {};
+// Platforms without a tray backend keep the application fully usable; the
+// controller only loses background hosting.
+class SystemTrayService::Private {};
 
-WindowsTrayService::WindowsTrayService(QObject *parent)
+SystemTrayService::SystemTrayService(QObject *parent)
     : QObject(parent), d_(new Private)
 {
 }
 
-WindowsTrayService::~WindowsTrayService()
+SystemTrayService::~SystemTrayService()
 {
     delete d_;
 }
 
-bool WindowsTrayService::start(QWindow *)
+bool SystemTrayService::start(QWindow *)
 {
     return false;
 }
 
-void WindowsTrayService::stop()
+void SystemTrayService::stop()
 {
 }
 
-bool WindowsTrayService::isRunning() const noexcept
+bool SystemTrayService::isRunning() const noexcept
 {
     return false;
 }
 
 #ifdef DOUYU_TESTING
-void WindowsTrayService::triggerShowForTest()
+void SystemTrayService::triggerShowForTest()
 {
     emit showRequested();
 }
 
-void WindowsTrayService::triggerQuitForTest()
+void SystemTrayService::triggerQuitForTest()
 {
     emit quitRequested();
 }

@@ -8,7 +8,7 @@
 #include <QTimer>
 #include <QtTest/QtTest>
 
-#include "app/windows_notification_service.h"
+#include "app/system_notification_service.h"
 #include "danmaku/douyu_danmaku_client.h"
 #include "ui/app_controller.h"
 #include "ui/room_list_model.h"

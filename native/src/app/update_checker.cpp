@@ -80,7 +80,7 @@ void UpdateChecker::check()
         staleReply->deleteLater();
     }
     latestVersion_.clear();
-    releaseUrl_ = {};
+    releaseUrl_ = QUrl();
     errorMessage_.clear();
     emit resultChanged();
     setState(State::Checking);

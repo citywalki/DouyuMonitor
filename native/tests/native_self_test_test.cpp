@@ -16,6 +16,21 @@ private slots:
     void isBuiltAsWindowsGuiExecutable();
 };
 
+// The macOS target is built as an application bundle, so the binary lives
+// inside the bundle even though the test executable sits beside it.
+QString monitorExecutablePath()
+{
+    const QDir binaryDir(QCoreApplication::applicationDirPath());
+#ifdef Q_OS_WIN
+    return binaryDir.filePath(QStringLiteral("douyu_monitor_native.exe"));
+#elif defined(Q_OS_MACOS)
+    return binaryDir.filePath(
+        QStringLiteral("douyu_monitor_native.app/Contents/MacOS/douyu_monitor_native"));
+#else
+    return binaryDir.filePath(QStringLiteral("douyu_monitor_native"));
+#endif
+}
+
 quint16 peSubsystem(const QString &executable)
 {
     QFile file(executable);
@@ -34,15 +49,16 @@ quint16 peSubsystem(const QString &executable)
 
 void NativeSelfTestTest::quickSelfTestReportsRendererReadiness()
 {
-    const QString executable = QDir(QCoreApplication::applicationDirPath())
-        .filePath(QStringLiteral("douyu_monitor_native.exe"));
+    const QString executable = monitorExecutablePath();
     QVERIFY(QFileInfo::exists(executable));
 
     QProcess process;
     process.setProgram(executable);
     process.setArguments({QStringLiteral("--self-test")});
     auto environment = QProcessEnvironment::systemEnvironment();
+#ifdef Q_OS_WIN
     environment.insert(QStringLiteral("QT_QPA_PLATFORM"), QStringLiteral("windows"));
+#endif
     process.setProcessEnvironment(environment);
     process.start();
     QVERIFY2(process.waitForFinished(60000), qPrintable(process.errorString()));
@@ -72,8 +88,7 @@ void NativeSelfTestTest::exercisesMediaLifecycle()
     QCOMPARE(fixture.write(y4m), static_cast<qint64>(y4m.size()));
     fixture.close();
 
-    const QString executable = QDir(QCoreApplication::applicationDirPath())
-        .filePath(QStringLiteral("douyu_monitor_native.exe"));
+    const QString executable = monitorExecutablePath();
     QVERIFY(QFileInfo::exists(executable));
 
     QProcess process;
@@ -98,9 +113,12 @@ void NativeSelfTestTest::exercisesMediaLifecycle()
 
 void NativeSelfTestTest::isBuiltAsWindowsGuiExecutable()
 {
-    const QString executable = QDir(QCoreApplication::applicationDirPath())
-        .filePath(QStringLiteral("douyu_monitor_native.exe"));
+#ifndef Q_OS_WIN
+    QSKIP("PE subsystem checks only apply to Windows binaries.");
+#else
+    const QString executable = monitorExecutablePath();
     QCOMPARE(peSubsystem(executable), quint16(2));
+#endif
 }
 
 QTEST_GUILESS_MAIN(NativeSelfTestTest)

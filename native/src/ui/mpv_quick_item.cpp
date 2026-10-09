@@ -16,6 +16,7 @@
 #include <mpv/render.h>
 #include <mpv/render_gl.h>
 
+#include <clocale>
 #include <cmath>
 
 namespace {
@@ -34,7 +35,8 @@ std::atomic_uint64_t g_lastCoreTeardownSequence = 0;
 void *getProcAddress(void *, const char *name)
 {
     QOpenGLContext *context = QOpenGLContext::currentContext();
-    return context != nullptr ? context->getProcAddress(QByteArray(name)) : nullptr;
+    if (context == nullptr) return nullptr;
+    return reinterpret_cast<void *>(context->getProcAddress(QByteArray(name)));
 }
 
 QString safeErrorLabelForCode(const QString &errorCode)
@@ -285,6 +287,10 @@ MpvQuickItem::MpvQuickItem(QQuickItem *parent)
 {
     setMirrorVertically(true);
     setTextureFollowsItemSize(true);
+    // libmpv and FFmpeg parse numeric options with the C locale and refuse to
+    // create a handle when LC_NUMERIC is not "C" (the macOS default locale is
+    // a UTF-8 one).
+    std::setlocale(LC_NUMERIC, "C");
     mpv_ = mpv_create();
     if (mpv_ == nullptr) {
         errorCode_ = QStringLiteral("PLAYER_UNAVAILABLE");

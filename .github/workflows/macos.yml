@@ -1,0 +1,79 @@
+name: macOS
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: macOS arm64 build and bundle
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install native dependencies
+        run: |
+          brew install qt mpv ninja
+          brew --prefix qt
+          brew --prefix mpv
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build StreamGet service
+        working-directory: native
+        run: |
+          ./scripts/bootstrap-streamget-service.sh
+          ./scripts/build-streamget-service.sh
+
+      - name: Configure
+        working-directory: native
+        run: cmake --preset macos-arm64-release
+
+      - name: Build
+        working-directory: native
+        run: cmake --build --preset macos-arm64-release
+
+      - name: Run tests
+        working-directory: native
+        run: ctest --preset macos-arm64-release
+
+      - name: Bundle application
+        working-directory: native
+        run: ./scripts/bundle-macos-app.sh macos-arm64-release
+
+      - name: Verify bundled application
+        working-directory: native
+        run: |
+          App="out/installer/DouyuMonitor.app"
+          test -x "${App}/Contents/MacOS/douyu_monitor_native"
+          test -x "${App}/Contents/Resources/streamget_service/streamget_service"
+          test -f "${App}/Contents/Resources/douyu_monitor.icns"
+          # The bundle must not depend on this runner's Homebrew prefix.
+          ! otool -L "${App}/Contents/MacOS/douyu_monitor_native" | grep -q "${HOME}/\|/opt/homebrew/opt"
+          "${App}/Contents/MacOS/douyu_monitor_native" --self-test
+
+      - name: Archive application
+        working-directory: native
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            out/installer/DouyuMonitor.app \
+            out/installer/DouyuMonitor-macOS-arm64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DouyuMonitor-macOS-arm64
+          path: native/out/installer/DouyuMonitor-macOS-arm64.zip
+          if-no-files-found: error
+          retention-days: 30

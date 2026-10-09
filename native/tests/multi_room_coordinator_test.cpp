@@ -324,12 +324,26 @@ void MultiRoomCoordinatorTest::oneRoomFailureDoesNotBlockOtherRooms()
     QVERIFY(coordinator.addRoom(QStringLiteral("63137")));
     RoomSession *firstSession = coordinator.sessionForRoom(QStringLiteral("63136"));
     QVERIFY(firstSession != nullptr);
-    QTRY_COMPARE_WITH_TIMEOUT(firstSession->state(), RoomSession::State::Idle, 3000);
-    QCOMPARE(firstSession->liveStatus(), RoomLiveStatus::Online);
+
+    // The first resolve is answered as offline while the status API keeps
+    // reporting the room as online. Which response lands first decides whether
+    // the status refresh triggers one more resolve, so synchronize on the
+    // client draining instead of pinning one ordering.
+    QTRY_COMPARE_WITH_TIMEOUT(firstSession->liveStatus(), RoomLiveStatus::Online, 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(client.activeRequestCount() == 0
+                                 && client.queuedRequestCount() == 0,
+                             3000);
+    QVERIFY(firstSession->state() != RoomSession::State::Error);
     QCOMPARE(failures.count(), 0);
     QCOMPARE(firstSession->playbackHealth(), RoomPlaybackHealth::Pending);
     QCOMPARE(coordinator.roomCount(), 2);
-    QVERIFY(coordinator.sessionForRoom(QStringLiteral("63137")) != nullptr);
+
+    // The offline answer must not hold back the healthy room: its resolve
+    // reached the source-ready stage.
+    RoomSession *secondSession = coordinator.sessionForRoom(QStringLiteral("63137"));
+    QVERIFY(secondSession != nullptr);
+    QTRY_VERIFY_WITH_TIMEOUT(secondSession->hasPendingSourceForTest(), 3000);
+    QCOMPARE(secondSession->liveStatus(), RoomLiveStatus::Online);
     client.shutdown();
 }
 

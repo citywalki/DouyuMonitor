@@ -27,14 +27,14 @@ public:
     virtual void show(const QString &title, const QString &body) = 0;
 };
 
-class WindowsNotificationService final : public QObject {
+class SystemNotificationService final : public QObject {
     Q_OBJECT
 
 public:
-    explicit WindowsNotificationService(QSettings *settings,
+    explicit SystemNotificationService(QSettings *settings,
                                         SystemNotificationSink *sink = nullptr,
                                         QObject *parent = nullptr);
-    ~WindowsNotificationService() override;
+    ~SystemNotificationService() override;
 
     NotificationPreferences preferences() const noexcept;
     bool setPreferences(NotificationPreferences preferences);

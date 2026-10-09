@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QSysInfo>
 #include <QtGlobal>
 
 
@@ -12,6 +13,44 @@ namespace {
 QString outputPath(const QString &directory, const QString &name)
 {
     return directory + QLatin1Char('/') + name + QStringLiteral(".png");
+}
+
+// Retina displays grab at 2x; baselines are kept in device-independent pixels
+// so one logical layout is comparable on every host.
+QImage normalizeDevicePixelRatio(const QImage &image)
+{
+    if (image.isNull()) return image;
+    const qreal ratio = image.devicePixelRatio();
+    if (ratio <= 1.0) return image;
+    QImage normalized = image.scaled(QSize(qRound(image.width() / ratio),
+                                           qRound(image.height() / ratio)),
+                                     Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    normalized.setDevicePixelRatio(1.0);
+    return normalized;
+}
+
+// Text rasterization and widget metrics differ per platform, so each platform
+// compares against its own baseline set. Windows keeps the historical layout
+// at the baseline root.
+QString visualBaselineDirectory()
+{
+    const QString root = QStringLiteral(QML_VISUAL_BASELINE_DIR);
+    const QString platformDirectory = root + QLatin1Char('/') + QSysInfo::kernelType();
+    if (QDir(platformDirectory).exists()) return platformDirectory;
+    if (qEnvironmentVariableIsSet("DOUYU_UPDATE_VISUAL_BASELINES")
+        && QDir().mkpath(platformDirectory)) {
+        return platformDirectory;
+    }
+    return root;
+}
+
+QString baselineUpdateCommand()
+{
+#ifdef Q_OS_WIN
+    return QStringLiteral("scripts/update-visual-baselines.ps1 -Approve");
+#else
+    return QStringLiteral("scripts/update-visual-baselines.sh --approve");
+#endif
 }
 
 int channelDelta(int first, int second)
@@ -35,12 +74,13 @@ QString comparisonMessage(const QString &name,
 {
     return QStringLiteral("Visual baseline mismatch for %1: %2 pixels (%3%) differ. "
                           "Current: %4. Diff: %5. Review the change, then run "
-                          "scripts/update-visual-baselines.ps1 -Approve if intentional.")
+                          "%6 if intentional.")
         .arg(name)
         .arg(changedPixels)
         .arg(changedRatio * 100.0, 0, 'f', 3)
         .arg(actualPath)
-        .arg(diffPath);
+        .arg(diffPath)
+        .arg(baselineUpdateCommand());
 }
 
 } // namespace
@@ -122,7 +162,7 @@ QVariantList visualRoomFixtures(int count, bool multiAudio, bool includeQualitie
 QImage visualCapture(QQuickWindow *window, const QString &name)
 {
     if (window == nullptr) return {};
-    const QImage image = window->grabWindow();
+    const QImage image = normalizeDevicePixelRatio(window->grabWindow());
     const QString directory = QStringLiteral(QML_VISUAL_OUTPUT_DIR);
     if (!QDir().mkpath(directory)) return {};
     if (!image.save(outputPath(directory, name))) return {};
@@ -139,7 +179,7 @@ VisualComparisonResult visualCompareWithBaseline(const QImage &image,
         return result;
     }
 
-    const QString baselineDirectory = QStringLiteral(QML_VISUAL_BASELINE_DIR);
+    const QString baselineDirectory = visualBaselineDirectory();
     const QString outputDirectory = QStringLiteral(QML_VISUAL_OUTPUT_DIR);
     const QString baselinePath = outputPath(baselineDirectory, name);
     const QString actualPath = outputPath(outputDirectory, name);

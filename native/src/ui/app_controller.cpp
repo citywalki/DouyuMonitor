@@ -13,10 +13,10 @@
 #include <algorithm>
 #include <memory>
 
-#include "app/windows_notification_service.h"
+#include "app/system_notification_service.h"
 #include "app/maozi_rank_client.h"
 #include "app/update_checker.h"
-#include "app/windows_tray_service.h"
+#include "app/system_tray_service.h"
 #include "danmaku/danmaku_socket.h"
 #include "danmaku/danmaku_timer_scheduler.h"
 #include "service/streamget_process_client.h"
@@ -187,8 +187,8 @@ AppController::AppController(QString serviceProgram,
     });
     connect(guildRoomResolver_, &GuildRoomResolver::memberChanged, this,
             [this](const QString &) { scheduleGuildRosterNotification(); });
-    notificationService_ = std::make_unique<WindowsNotificationService>(settings, notificationSink, this);
-    trayService_ = std::make_unique<WindowsTrayService>(this);
+    notificationService_ = std::make_unique<SystemNotificationService>(settings, notificationSink, this);
+    trayService_ = std::make_unique<SystemTrayService>(this);
     rooms_ = std::make_unique<RoomListModel>(this);
     workspace_ = std::make_unique<WorkspaceModel>(this, this);
     connect(workspace_.get(), &WorkspaceModel::workspaceDataChanged,
@@ -290,9 +290,9 @@ AppController::AppController(QString serviceProgram,
     monitoring_->setStatus(notificationStatus, MonitoringModel::RecoveryStatus::Healthy);
     synchronizeFavoriteMonitor();
 
-    connect(trayService_.get(), &WindowsTrayService::showRequested,
+    connect(trayService_.get(), &SystemTrayService::showRequested,
             this, &AppController::restoreFromBackground);
-    connect(trayService_.get(), &WindowsTrayService::quitRequested,
+    connect(trayService_.get(), &SystemTrayService::quitRequested,
             this, &AppController::requestQuit);
 }
 
